@@ -1,0 +1,69 @@
+###############################################################################
+# Cloud Build — staging environment
+# Trigger: push to `staging` branch
+#
+# Cloud Run Job (no HTTP surface). Unlike a Service, a Job has no traffic
+# concept — `jobs deploy` just updates the definition; the next
+# `jobs:run` uses the new image. No promotion ceremony.
+###############################################################################
+
+substitutions:
+  _REGION: us-central1
+  _AR_REPO: gub-research-worker
+  _JOB: gub-research-worker-staging
+  _DB_SECRET: gub-research-worker-db-url-staging
+  _PERPLEXITY_SECRET: gub-research-worker-perplexity-api-key-staging
+  _CLOUDSQL_INSTANCE: gub-platform
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: E2_MEDIUM
+
+steps:
+  - id: typecheck
+    name: node:22-slim
+    entrypoint: sh
+    args:
+      - -c
+      - npm ci && npx prisma generate && npx tsc --noEmit
+
+  - id: build
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - $_REGION-docker.pkg.dev/$PROJECT_ID/$_AR_REPO/$_JOB:$SHORT_SHA
+      - -t
+      - $_REGION-docker.pkg.dev/$PROJECT_ID/$_AR_REPO/$_JOB:latest
+      - .
+    waitFor: [typecheck]
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - --all-tags
+      - $_REGION-docker.pkg.dev/$PROJECT_ID/$_AR_REPO/$_JOB
+    waitFor: [build]
+
+  - id: deploy
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - $_JOB
+      - --image=$_REGION-docker.pkg.dev/$PROJECT_ID/$_AR_REPO/$_JOB:$SHORT_SHA
+      - --region=$_REGION
+      - --tasks=1
+      - --parallelism=1
+      - --max-retries=0
+      - --task-timeout=86400s
+      - --memory=512Mi
+      - --cpu=1
+      - --service-account=sa-$_JOB@$PROJECT_ID.iam.gserviceaccount.com
+      - --set-cloudsql-instances=$PROJECT_ID:$_REGION:$_CLOUDSQL_INSTANCE
+      - --set-env-vars=NODE_ENV=production,RESEARCH_CALL_TIMEOUT_S=900,RESEARCH_STALE_RUNNING_S=1200,RESEARCH_MAX_CONCURRENCY=3
+      - --set-secrets=DATABASE_URL=$_DB_SECRET:latest,PERPLEXITY_API_KEY=$_PERPLEXITY_SECRET:latest
+    waitFor: [push]

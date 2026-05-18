@@ -1,0 +1,687 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
+// ── Auth identity layer ────────────────────────────────────────────────────
+// Anyone who authenticates with the platform via Google OAuth.
+// May be a client, vendor, partner, external collaborator, or staff member.
+// Does NOT represent org relationships — that is the Staff table.
+
+model User {
+  id          String   @id @default(uuid()) @db.Uuid
+  email       String   @unique
+  googleSub   String?  @unique @map("google_sub")
+  displayName String?  @map("display_name")
+  avatarUrl   String?  @map("avatar_url")
+  role        String   @default("viewer")
+  isAdmin     Boolean  @default(false) @map("is_admin")
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  refreshTokens  RefreshToken[]
+  externalIds    UserExternalId[]
+  staffProfile   Staff?
+  accessGrants   AccessGrant[]
+  accessRequests AccessRequest[]
+  oauthAuthCodes OAuthAuthCode[]
+
+  @@map("users")
+}
+
+// ── Org identity layer ─────────────────────────────────────────────────────
+// Employees — current and former — of the agency.
+// This is the source of truth for people in all org relationships:
+//   campaigns.created_by, account_changes.changed_by, audit_log.actor_id
+//   and any value_uuid in account_changes / campaign_changes that
+//   references a person (convention: property name ends in _staff_id).
+//
+// user_id is nullable — not all staff have platform access.
+// A staff record must never be hard-deleted; use status = 'former'.
+
+model Office {
+  id        String    @id @default(uuid()) @db.Uuid
+  name      String    @unique
+  oktaCity  String?   @unique @map("okta_city")
+  isActive  Boolean   @default(true) @map("is_active")
+  startedAt DateTime? @map("started_at") @db.Date
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  staff   Staff[]
+  changes OfficeChange[]
+
+  @@map("offices")
+}
+
+model OfficeChange {
+  id        String    @id @default(uuid()) @db.Uuid
+  officeId  String    @map("office_id") @db.Uuid
+  property  String
+  valueText String?   @map("value_text")
+  valueDate DateTime? @map("value_date") @db.Date
+  changedBy String?   @map("changed_by") @db.Uuid
+  changedAt DateTime  @default(now()) @map("changed_at") @db.Timestamptz
+
+  office         Office @relation(fields: [officeId], references: [id], onDelete: Cascade)
+  changedByStaff Staff? @relation("OfficeChangedByStaff", fields: [changedBy], references: [id])
+
+  @@index([officeId, property, changedAt(sort: Desc)])
+  @@map("office_changes")
+}
+
+model Team {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String    @unique
+  description String?
+  isActive    Boolean   @default(true) @map("is_active")
+  startedAt   DateTime? @map("started_at") @db.Date
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  members TeamMember[]
+  changes TeamChange[]
+
+  @@map("teams")
+}
+
+model TeamChange {
+  id        String    @id @default(uuid()) @db.Uuid
+  teamId    String    @map("team_id") @db.Uuid
+  property  String
+  valueText String?   @map("value_text")
+  valueDate DateTime? @map("value_date") @db.Date
+  changedBy String?   @map("changed_by") @db.Uuid
+  changedAt DateTime  @default(now()) @map("changed_at") @db.Timestamptz
+
+  team           Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  changedByStaff Staff? @relation("TeamChangedByStaff", fields: [changedBy], references: [id])
+
+  @@index([teamId, property, changedAt(sort: Desc)])
+  @@map("team_changes")
+}
+
+model TeamMember {
+  id      String   @id @default(uuid()) @db.Uuid
+  teamId  String   @map("team_id") @db.Uuid
+  staffId String   @map("staff_id") @db.Uuid
+  addedAt DateTime @default(now()) @map("added_at") @db.Timestamptz
+
+  team  Team  @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@unique([teamId, staffId])
+  @@index([staffId])
+  @@map("team_members")
+}
+
+model Staff {
+  id         String    @id @default(uuid()) @db.Uuid
+  userId     String?   @unique @map("user_id") @db.Uuid
+  officeId   String?   @map("office_id") @db.Uuid
+  fullName   String    @map("full_name")
+  email      String    @unique
+  title      String?
+  department String?
+  status     String    @default("active")
+  startedAt  DateTime  @map("started_at") @db.Date
+  endedAt    DateTime? @map("ended_at") @db.Date
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  user                     User?                  @relation(fields: [userId], references: [id], onDelete: SetNull)
+  office                   Office?                @relation(fields: [officeId], references: [id], onDelete: SetNull)
+  teamMemberships          TeamMember[]
+  externalIds              StaffExternalId[]
+  changes                  StaffChange[]
+  accountChanges           AccountChange[]        @relation("AccountChangedByStaff")
+  campaignsCreated         Campaign[]             @relation("CampaignCreatedByStaff")
+  campaignChanges          CampaignChange[]       @relation("CampaignChangedByStaff")
+  officeChanges            OfficeChange[]         @relation("OfficeChangedByStaff")
+  teamChanges              TeamChange[]           @relation("TeamChangedByStaff")
+  auditActions             AuditLog[]             @relation("AuditLogActorStaff")
+  grantsGiven              AccessGrant[]          @relation("AccessGrantGrantedByStaff")
+  grantsRevoked            AccessGrant[]          @relation("AccessGrantRevokedByStaff")
+  reviewedRequests         AccessRequest[]        @relation("AccessRequestReviewedByStaff")
+  metadata                 StaffMetadata[]
+  // Bot credentials this operator clicked Authorize on (Settings → Sync
+  // Credentials). Mirrors the existing actor pattern.
+  botCredentialsAuthorized BotCredential[]        @relation("BotCredentialAuthorizedByStaff")
+  oauthStateTokens         OAuthStateToken[]      @relation("OAuthStateTokenStaff")
+  // Deep-research dossiers about this staff member. Migration owned by
+  // gcp-universal-backend (20260513000000_research_jobs_and_dossiers);
+  // gub-admin hosts the worker that writes these.
+  researchJobs             ResearchJob[]
+  researchDossiers         StaffResearchDossier[]
+
+  @@index([userId])
+  @@index([officeId])
+  @@index([status])
+  @@map("staff")
+}
+
+// Append-only change log for staff — same pattern as account_changes / office_changes.
+// source: 'okta_sync' | 'okta_webhook' | 'admin' (how the change arrived)
+model StaffChange {
+  id         String    @id @default(uuid()) @db.Uuid
+  staffId    String    @map("staff_id") @db.Uuid
+  property   String
+  valueText  String?   @map("value_text")
+  valueUuid  String?   @map("value_uuid") @db.Uuid
+  valueDate  DateTime? @map("value_date") @db.Date
+  valueIsPii Boolean   @default(false) @map("value_is_pii")
+  source     String    @default("admin")
+  changedAt  DateTime  @default(now()) @map("changed_at") @db.Timestamptz
+
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@index([staffId, property, changedAt(sort: Desc)])
+  @@map("staff_changes")
+}
+
+model StaffExternalId {
+  id         String   @id @default(uuid()) @db.Uuid
+  staffId    String   @map("staff_id") @db.Uuid
+  system     String
+  externalId String   @map("external_id")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@unique([system, externalId])
+  @@index([staffId])
+  @@map("staff_external_ids")
+}
+
+// ── Accounts ───────────────────────────────────────────────────────────────
+
+model Account {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  parentId  String?  @map("parent_id") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  parent    Account?        @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children  Account[]       @relation("AccountHierarchy")
+  changes   AccountChange[]
+  campaigns Campaign[]
+
+  @@map("accounts")
+}
+
+// Append-only log of account property changes.
+// Current state = latest changedAt per property.
+// When value_uuid references a staff member, the property name
+// should end in _staff_id (e.g. account_exec_staff_id).
+model AccountChange {
+  id        String    @id @default(uuid()) @db.Uuid
+  accountId String    @map("account_id") @db.Uuid
+  property  String
+  valueText String?   @map("value_text")
+  valueUuid String?   @map("value_uuid") @db.Uuid
+  valueDate DateTime? @map("value_date") @db.Date
+  changedBy String    @map("changed_by") @db.Uuid
+  changedAt DateTime  @default(now()) @map("changed_at") @db.Timestamptz
+
+  account        Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  changedByStaff Staff   @relation("AccountChangedByStaff", fields: [changedBy], references: [id])
+
+  @@index([accountId, property, changedAt(sort: Desc)])
+  @@map("account_changes")
+}
+
+// ── Campaigns ──────────────────────────────────────────────────────────────
+
+model Campaign {
+  id        String    @id @default(uuid()) @db.Uuid
+  accountId String    @map("account_id") @db.Uuid
+  name      String
+  status    String    @default("pitch")
+  budget    Decimal?  @db.Decimal(15, 2)
+  assetsUrl String?   @map("assets_url")
+  awardedAt DateTime? @map("awarded_at") @db.Date
+  liveAt    DateTime? @map("live_at") @db.Date
+  endsAt    DateTime? @map("ends_at") @db.Date
+  createdBy String    @map("created_by") @db.Uuid
+  createdAt DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  account        Account          @relation(fields: [accountId], references: [id])
+  createdByStaff Staff            @relation("CampaignCreatedByStaff", fields: [createdBy], references: [id])
+  changes        CampaignChange[]
+
+  @@index([accountId])
+  @@index([status])
+  @@map("campaigns")
+}
+
+// Append-only log of campaign property changes.
+// Same conventions as AccountChange.
+model CampaignChange {
+  id         String    @id @default(uuid()) @db.Uuid
+  campaignId String    @map("campaign_id") @db.Uuid
+  property   String
+  valueText  String?   @map("value_text")
+  valueUuid  String?   @map("value_uuid") @db.Uuid
+  valueDate  DateTime? @map("value_date") @db.Date
+  changedBy  String    @map("changed_by") @db.Uuid
+  changedAt  DateTime  @default(now()) @map("changed_at") @db.Timestamptz
+
+  campaign       Campaign @relation(fields: [campaignId], references: [id])
+  changedByStaff Staff    @relation("CampaignChangedByStaff", fields: [changedBy], references: [id])
+
+  @@index([campaignId, property, changedAt(sort: Desc)])
+  @@map("campaign_changes")
+}
+
+// ── Audit log ──────────────────────────────────────────────────────────────
+// Append-only. Immutable at the DB level via trigger.
+// actor_id references staff — platform actions are always attributed
+// to an org identity, not a raw auth credential.
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String   @map("entity_id") @db.Uuid
+  actorId    String   @map("actor_id") @db.Uuid
+  before     Json?
+  after      Json?
+  metadata   Json?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  actor Staff @relation("AuditLogActorStaff", fields: [actorId], references: [id])
+
+  @@index([entityType, entityId, createdAt(sort: Desc)])
+  @@index([actorId, createdAt(sort: Desc)])
+  @@index([action, createdAt(sort: Desc)])
+  @@map("audit_log")
+}
+
+// ── Access control ─────────────────────────────────────────────────────────
+// Fully explicit per-resource grants. Every user needs a row per resource.
+// No implicit inheritance. grantAccountAccess() creates all rows in one call.
+// Soft revoke only — never hard-delete, preserve audit trail.
+// is_admin on users bypasses all checks — superuser escape hatch.
+//
+// NOTE: the partial unique index (WHERE revoked_at IS NULL) cannot be expressed
+// in Prisma schema — it lives only in the migration SQL. Prisma's @@unique
+// without a WHERE clause would incorrectly block re-granting after revocation.
+
+model AccessGrant {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  resourceType String    @map("resource_type")
+  resourceId   String    @map("resource_id") @db.Uuid
+  role         String    @default("viewer")
+  grantedBy    String    @map("granted_by") @db.Uuid
+  grantedAt    DateTime  @default(now()) @map("granted_at") @db.Timestamptz
+  expiresAt    DateTime? @map("expires_at") @db.Timestamptz
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz
+  revokedBy    String?   @map("revoked_by") @db.Uuid
+
+  user           User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  grantedByStaff Staff  @relation("AccessGrantGrantedByStaff", fields: [grantedBy], references: [id], onDelete: Restrict)
+  revokedByStaff Staff? @relation("AccessGrantRevokedByStaff", fields: [revokedBy], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([userId, resourceType, resourceId])
+  @@index([resourceType, resourceId])
+  @@index([grantedBy])
+  @@map("access_grants")
+}
+
+// ── Access requests ────────────────────────────────────────────────────────
+
+model AccessRequest {
+  id                String    @id @default(uuid()) @db.Uuid
+  userId            String    @map("user_id") @db.Uuid
+  resourceType      String    @map("resource_type")
+  resourceId        String?   @map("resource_id") @db.Uuid
+  requestedRole     String    @map("requested_role")
+  reason            String?
+  status            String    @default("pending")
+  reviewedByStaffId String?   @map("reviewed_by_staff_id") @db.Uuid
+  reviewedAt        DateTime? @map("reviewed_at") @db.Timestamptz
+  reviewNote        String?   @map("review_note")
+  grantId           String?   @map("grant_id") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  user            User   @relation(fields: [userId], references: [id], onDelete: Restrict)
+  reviewedByStaff Staff? @relation("AccessRequestReviewedByStaff", fields: [reviewedByStaffId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([status])
+  @@index([resourceType, resourceId])
+  @@map("access_requests")
+}
+
+// ── Auth support tables ────────────────────────────────────────────────────
+
+model UserExternalId {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  system     String
+  externalId String   @map("external_id")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([system, externalId])
+  @@index([userId])
+  @@map("user_external_ids")
+}
+
+// Thin registry of known appIds. Used to give friendly names to appIds
+// in lists (audit logs, sync runs, etc.). NOT a gate — per-app access
+// decisions belong to each consuming app, not GUB. See
+// gcp-universal-backend/docs/proposals/remove-app-access-gating.md.
+model App {
+  id           String   @id @default(uuid()) @db.Uuid
+  appId        String   @unique @map("app_id")
+  name         String
+  description  String?
+  dbIdentifier String?  @map("db_identifier")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("apps")
+}
+
+model RefreshToken {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @map("user_id") @db.Uuid
+  tokenHash    String    @unique @map("token_hash")
+  family       String    @db.Uuid
+  issuedAt     DateTime  @default(now()) @map("issued_at") @db.Timestamptz
+  expiresAt    DateTime  @map("expires_at") @db.Timestamptz
+  revokedAt    DateTime? @map("revoked_at") @db.Timestamptz
+  replacedById String?   @map("replaced_by") @db.Uuid
+  ipAddress    String?   @map("ip_address")
+  userAgent    String?   @map("user_agent")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([family])
+  @@map("refresh_tokens")
+}
+
+// ── OAuth Broker ───────────────────────────────────────────────────────────
+
+model OAuthClient {
+  id               String   @id @default(uuid()) @db.Uuid
+  clientId         String   @unique @map("client_id")
+  clientSecretHash String   @map("client_secret_hash")
+  name             String
+  redirectUris     String[] @map("redirect_uris")
+  isActive         Boolean  @default(true) @map("is_active")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  pendingAuths OAuthPendingAuth[]
+  authCodes    OAuthAuthCode[]
+
+  @@map("oauth_clients")
+}
+
+model OAuthPendingAuth {
+  id          String   @id @default(uuid()) @db.Uuid
+  clientId    String   @map("client_id")
+  redirectUri String   @map("redirect_uri")
+  clientState String?  @map("client_state")
+  expiresAt   DateTime @map("expires_at") @db.Timestamptz
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  client OAuthClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("oauth_pending_auths")
+}
+
+model OAuthAuthCode {
+  id          String    @id @default(uuid()) @db.Uuid
+  codeHash    String    @unique @map("code_hash")
+  clientId    String    @map("client_id")
+  userId      String    @map("user_id") @db.Uuid
+  redirectUri String    @map("redirect_uri")
+  expiresAt   DateTime  @map("expires_at") @db.Timestamptz
+  usedAt      DateTime? @map("used_at") @db.Timestamptz
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+
+  client OAuthClient @relation(fields: [clientId], references: [clientId], onDelete: Cascade)
+  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([expiresAt])
+  @@map("oauth_auth_codes")
+}
+
+// Runtime-mutable trusted apps registry. Source of truth: managed via
+// /settings/trusted-apps in this admin UI. Two consuming services in
+// gcp-universal-backend read this table:
+//   - originAllowList middleware: "is the request's Origin on any
+//     active row's `origins`?" (coarse CORS gate)
+//   - verifyGoogleToken: pulls active `googleClientIds` for crypto
+//     verification, then enforces strict same-row pairing — token's
+//     `aud` AND request's Origin must be on the SAME row, so a fork
+//     of a registered app doesn't inherit access.
+//
+// Migration that creates the table + folds the legacy CORS rows lives
+// in gcp-universal-backend (20260430040000_trusted_apps_registry).
+// This declaration just gives gub-admin typed access.
+//
+// SCOPE: dev/staging tooling. Production trust will land at the edge
+// (WAF / Cloud Armor / LB) plus upstream OAuth client registration;
+// see the gcp-universal-backend README "Trusted apps registry —
+// dev/staging tooling" section for the two-layer architecture.
+model TrustedApp {
+  id              String   @id @default(uuid()) @db.Uuid
+  name            String
+  origins         String[]
+  googleClientIds String[] @map("google_client_ids")
+  isActive        Boolean  @default(true) @map("is_active")
+  addedBy         String?  @map("added_by") @db.Uuid
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@index([isActive])
+  @@map("trusted_apps")
+}
+
+model StaffMetadata {
+  id         String   @id @default(uuid()) @db.Uuid
+  staffId    String   @map("staff_id") @db.Uuid
+  type       String
+  label      String
+  value      String?
+  notes      String?
+  metadata   Json?
+  isFeatured Boolean  @default(false) @map("is_featured")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  staff Staff @relation(fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@index([staffId, type])
+  @@index([type, label])
+  @@index([type, value])
+  @@map("staff_metadata")
+}
+
+// ── Sync runs ─────────────────────────────────────────────────────────────
+
+model DataSource {
+  id           String    @id @default(uuid()) @db.Uuid
+  key          String    @unique
+  name         String
+  description  String?   @db.Text
+  isActive     Boolean   @default(true) @map("is_active")
+  syncInterval String    @default("daily") @map("sync_interval")
+  cronSchedule String?   @map("cron_schedule")
+  lastSyncAt   DateTime? @map("last_sync_at") @db.Timestamptz
+  lastStatus   String?   @map("last_status")
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("data_sources")
+}
+
+model SyncRun {
+  id          String    @id @default(uuid()) @db.Uuid
+  source      String
+  status      String    @default("running")
+  startedAt   DateTime  @default(now()) @map("started_at") @db.Timestamptz
+  completedAt DateTime? @map("completed_at") @db.Timestamptz
+  durationMs  Int?      @map("duration_ms")
+  // Heartbeat — bumped on every row update via DB trigger and Prisma
+  // @updatedAt. Owned by gcp-universal-backend's Drive sync reaper.
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  totalScanned Int @default(0) @map("total_scanned")
+  created      Int @default(0)
+  updated      Int @default(0)
+  unchanged    Int @default(0)
+  skipped      Int @default(0)
+  errored      Int @default(0)
+
+  // Drive sync chunking checkpoints (null for other sources). Set by
+  // gcp-universal-backend's drive.runner when a chunk's wall-clock
+  // budget trips; null when status is success/failed.
+  chunkPhase Int? @map("chunk_phase")
+  chunkIndex Int? @map("chunk_index")
+
+  details Json?
+  summary String? @db.Text
+
+  @@index([source, startedAt(sort: Desc)])
+  @@index([status])
+  @@map("sync_runs")
+}
+
+// Singleton table tracking Drive incremental-poll state. Owned by
+// gcp-universal-backend (which performs the polling); this app only reads
+// from it for the Drive settings UI. Migrations live in
+// gcp-universal-backend; this declaration just gives gub-admin typed access.
+model DriveSyncState {
+  id                Int       @id @default(1)
+  pageToken         String?   @map("page_token") @db.Text
+  lastPolledAt      DateTime? @map("last_polled_at") @db.Timestamptz
+  lastOutcome       String?   @map("last_outcome")
+  lastFullSyncRunId String?   @map("last_full_sync_run_id") @db.Uuid
+  updatedAt         DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  @@map("drive_sync_state")
+}
+
+// ── Bot OAuth credentials (auth-no-DWD migration, Phase 4) ─────────────────
+// Long-lived OAuth refresh tokens for unattended Workspace syncs. gub-admin
+// is the WRITER (the OAuth callback at /api/sync-credentials/oauth-callback
+// inserts/upserts here). GUB backend reads via its own Prisma client at sync
+// time. Migration lives in gcp-universal-backend (20260507000000); this
+// declaration gives gub-admin's Prisma client typed access.
+//
+// CHECK constraint on bot_name (enforced server-side in the migration)
+// limits the closed set to 'directory' | 'drive' | 'groups'. Adding a new
+// bot is a deliberate code+migration change. See
+// gcp-universal-backend/docs/proposals/auth-no-dwd.md and bot-oauth-design.md.
+model BotCredential {
+  id                  String    @id @default(uuid()) @db.Uuid
+  botName             String    @unique @map("bot_name")
+  googleEmail         String    @map("google_email")
+  refreshToken        String    @map("refresh_token")
+  scopes              String[]
+  oauthClientId       String    @map("oauth_client_id")
+  // Staff.id of the operator who clicked Authorize. Mirrors the existing
+  // actor pattern (trusted_apps.added_by).
+  authorizedByStaffId String?   @map("authorized_by_staff_id") @db.Uuid
+  authorizedAt        DateTime  @default(now()) @map("authorized_at") @db.Timestamptz
+  lastUsedAt          DateTime? @map("last_used_at") @db.Timestamptz
+  notes               String?
+
+  authorizedByStaff Staff? @relation("BotCredentialAuthorizedByStaff", fields: [authorizedByStaffId], references: [id])
+
+  @@index([botName])
+  @@map("bot_credentials")
+}
+
+// Short-lived CSRF state for the bot-OAuth callback. Single-use; written by
+// /api/sync-credentials/[botName]/start-authorize, validated and deleted by
+// /api/sync-credentials/oauth-callback.
+model OAuthStateToken {
+  id        String   @id @default(uuid()) @db.Uuid
+  state     String   @unique
+  staffId   String   @map("staff_id") @db.Uuid
+  botName   String   @map("bot_name")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz
+  expiresAt DateTime @map("expires_at") @db.Timestamptz
+
+  staff Staff @relation("OAuthStateTokenStaff", fields: [staffId], references: [id], onDelete: Cascade)
+
+  @@index([state])
+  @@index([expiresAt])
+  @@map("oauth_state_tokens")
+}
+
+// ── Deep-research dossier pipeline ─────────────────────────────────────────
+// Migration owned by gcp-universal-backend
+// (prisma/migrations/20260513000000_research_jobs_and_dossiers). The tables
+// are in the shared GUB database; gub-admin reads + writes them via its own
+// Prisma client because the worker (Cloud-Scheduler-fired process-next
+// endpoint) lives here.
+//
+// Two-table model:
+//   ResearchJob          — the queue (one row per enqueue request)
+//   StaffResearchDossier — the artifact (one row per successful generation)
+//
+// See the GUB schema for the full ADR-style comment.
+
+model ResearchJob {
+  id                    String    @id @default(uuid()) @db.Uuid
+  staffId               String    @map("staff_id") @db.Uuid
+  provider              String // 'perplexity_agent' (v1 only)
+  preset                String // 'deep-research' | 'advanced-deep-research'
+  promptTemplateVersion String    @map("prompt_template_version")
+  status                String    @default("queued") // queued | running | completed | failed
+  attempts              Int       @default(0)
+  nextAttemptAt         DateTime? @map("next_attempt_at") @db.Timestamptz
+  resultDossierId       String?   @map("result_dossier_id") @db.Uuid
+  error                 String?   @db.Text
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  startedAt             DateTime? @map("started_at") @db.Timestamptz
+  completedAt           DateTime? @map("completed_at") @db.Timestamptz
+
+  staff         Staff                 @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  resultDossier StaffResearchDossier? @relation(fields: [resultDossierId], references: [id], onDelete: SetNull)
+
+  @@index([status, nextAttemptAt])
+  @@index([staffId])
+  @@map("research_jobs")
+}
+
+model StaffResearchDossier {
+  id                    String   @id @default(uuid()) @db.Uuid
+  staffId               String   @map("staff_id") @db.Uuid
+  provider              String
+  preset                String
+  promptTemplateVersion String   @map("prompt_template_version")
+  contentMarkdown       String   @map("content_markdown") @db.Text
+  citations             Json?
+  searchResults         Json?    @map("search_results")
+  usageMetadata         Json?    @map("usage_metadata")
+  confidence            String?
+  generatedAt           DateTime @default(now()) @map("generated_at") @db.Timestamptz
+
+  staff Staff         @relation(fields: [staffId], references: [id], onDelete: Cascade)
+  jobs  ResearchJob[]
+
+  @@unique([staffId, provider, preset, promptTemplateVersion])
+  @@index([staffId])
+  @@map("staff_research_dossiers")
+}

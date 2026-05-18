@@ -1,0 +1,26 @@
+{
+  "name": "gub-research-worker",
+  "version": "1.0.0",
+  "description": "Cloud Run Job that drains the research_jobs queue: claims queued rows, calls the deep-research provider (Perplexity Agent API), and writes staff_research_dossiers. Zero public surface — triggered only via the Cloud Run Admin API by gub-admin's Sync handler or the ingestion script.",
+  "private": true,
+  "main": "dist/main.js",
+  "scripts": {
+    "build": "prisma generate && tsc",
+    "start": "node dist/main.js",
+    "dev": "tsx -r dotenv/config src/main.ts",
+    "queue": "tsx -r dotenv/config scripts/queue-deep-research.ts"
+  },
+  "dependencies": {
+    "@perplexity-ai/perplexity_ai": "^0.29.0",
+    "@prisma/client": "^5.22.0",
+    "dotenv": "^16.4.7",
+    "google-auth-library": "^9.15.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "prisma": "^5.22.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
