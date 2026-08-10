@@ -8,7 +8,10 @@
     "build": "prisma generate && tsc",
     "start": "node dist/main.js",
     "dev": "tsx -r dotenv/config src/main.ts",
-    "queue": "tsx -r dotenv/config scripts/queue-deep-research.ts"
+    "queue": "tsx -r dotenv/config scripts/queue-deep-research.ts",
+    "lint": "eslint src",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
   "dependencies": {
     "@perplexity-ai/perplexity_ai": "^0.29.0",
@@ -18,9 +21,13 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.10.5",
+    "eslint": "^10.8.1",
+    "prettier": "^3.9.6",
     "prisma": "^5.22.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.7.3"
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.66.0"
   }
 }

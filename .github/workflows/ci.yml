@@ -2,7 +2,8 @@
 #
 # `npm run build` is `prisma generate && tsc`, which doubles as the type
 # check — same gate as the typecheck step in cloudbuild/*.yaml. There are no
-# tests and no lint config in this repo yet; add steps here when they land.
+# tests yet. ESLint + Prettier are configured (lint is currently clean); add
+# a lint step when ready to enforce.
 
 name: CI
 
