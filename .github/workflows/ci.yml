@@ -1,0 +1,37 @@
+# CI — build / type check.
+#
+# `npm run build` is `prisma generate && tsc`, which doubles as the type
+# check — same gate as the typecheck step in cloudbuild/*.yaml. There are no
+# tests and no lint config in this repo yet; add steps here when they land.
+
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build (prisma generate + tsc)
+        run: npm run build
