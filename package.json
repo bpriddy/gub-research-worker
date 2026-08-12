@@ -9,7 +9,7 @@
     "start": "node dist/main.js",
     "dev": "tsx -r dotenv/config src/main.ts",
     "queue": "tsx -r dotenv/config scripts/queue-deep-research.ts",
-    "lint": "eslint src",
+    "lint": "eslint src scripts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
   },
