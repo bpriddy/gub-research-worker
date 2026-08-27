@@ -33,15 +33,24 @@ steps:
   - id: typecheck
     name: node:22-slim
     entrypoint: sh
+    secretEnv: [GH_PACKAGES_TOKEN]
     args:
       - -c
-      - npm ci && npx prisma generate && npx tsc --noEmit
+      # Token goes to ~/.npmrc (never the workspace copy — the Docker build
+      # context must stay token-free; the image gets it via BuildKit secret).
+      - echo "//npm.pkg.github.com/:_authToken=$$GH_PACKAGES_TOKEN" > ~/.npmrc && npm ci && npx prisma generate && npx tsc --noEmit
 
   # ── 2. Build image ────────────────────────────────────────────────────────
   - id: build
     name: gcr.io/cloud-builders/docker
+    env: [DOCKER_BUILDKIT=1]
+    secretEnv: [GH_PACKAGES_TOKEN]
     args:
       - build
+      # Dockerfile mounts this for its npm ci and scrubs it — the token
+      # never lands in an image layer.
+      - --secret
+      - id=gh_packages_token,env=GH_PACKAGES_TOKEN
       - -t
       - $_REGION-docker.pkg.dev/$PROJECT_ID/$_AR_REPO/$_JOB:$SHORT_SHA
       - -t
@@ -92,3 +101,12 @@ steps:
       - --set-env-vars=NODE_ENV=production,RESEARCH_CALL_TIMEOUT_S=900,RESEARCH_STALE_RUNNING_S=1200,RESEARCH_MAX_CONCURRENCY=3
       - --set-secrets=DATABASE_URL=$_DB_SECRET:latest,PERPLEXITY_API_KEY=$_PERPLEXITY_SECRET:latest
     waitFor: [push]
+
+# @anomaly-technology/gub-schemas lives on GitHub Packages (private registry),
+# so every `npm ci` — the typecheck step and the one inside the Docker build —
+# needs a read:packages token. Same token as GHA CI's GH_PACKAGES_TOKEN repo
+# secret; stored in Secret Manager for Cloud Build. See gub-schemas SETUP.md.
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/gub-gh-packages-token-dev/versions/latest
+      env: GH_PACKAGES_TOKEN
