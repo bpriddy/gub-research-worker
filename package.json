@@ -11,7 +11,9 @@
     "queue": "tsx -r dotenv/config scripts/queue-deep-research.ts",
     "lint": "eslint src scripts",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "prepare": "git config core.hooksPath .githooks || true",
+    "typecheck": "prisma generate && tsc --noEmit"
   },
   "dependencies": {
     "@perplexity-ai/perplexity_ai": "^0.29.0",
