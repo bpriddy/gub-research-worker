@@ -6,7 +6,8 @@
 #   1. gitleaks     — block secrets from ever landing
 #   2. eslint       — lint staged src/ JS-TS (check only, no auto-fix)
 #   3. prettier     — codestyle check on staged JS-TS
-#   4. lint:schema  — validate prisma/schema.prisma when it is staged
+#   (schema lint moved to CI — see section 4 below and gub-schemas
+#    docs/SCHEMA-WORKFLOW-STANDARD.md §2.1)
 #
 # Setup is auto-wired by the package.json "prepare" script on `npm install`,
 # or run once manually:
@@ -46,10 +47,16 @@ if [ -n "$CODE" ]; then
   fi
 fi
 
-# ---- 4. schema lint when the canonical schema is staged -------------------
-if git diff --cached --name-only --diff-filter=ACMR | grep -q 'prisma/schema.prisma'; then
-  if node -e "process.exit((require('./package.json').scripts||{})['lint:schema']?0:1)" 2>/dev/null; then
-    echo "pre-commit: lint:schema"
-    npm run --silent lint:schema
-  fi
-fi
+# ---- 4. (schema lint moved to CI) -----------------------------------------
+# It used to run here. It does not any more, deliberately: it depends on a
+# package released from ANOTHER repository, so a new table could block a commit
+# until a cross-repo release finished — a release standing between someone and
+# their own feature branch. It is a policy check, so it belongs on a shared
+# signal rather than on whoever happens to be mid-commit, and a hook that
+# `--no-verify` skips was never the guarantee it looked like.
+#
+# It now runs in CI on every PR touching prisma/**. See gub-schemas
+# docs/SCHEMA-WORKFLOW-STANDARD.md §2.1.
+#
+# This hook keeps only checks that are local, fast and depend on nothing
+# outside this repo: gitleaks, eslint, prettier.
