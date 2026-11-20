@@ -115,7 +115,9 @@ The script prints the remaining manual steps:
    printf '%s' '<perplexity-api-key>' \
      | gcloud secrets versions add gub-research-worker-perplexity-api-key-dev --data-file=-
    ```
-3. Push to `main` → first deploy creates the Job.
+3. Dispatch the Deploy workflow on `main` and approve it (GitHub
+   Environment `prod`; a push to `main` no longer deploys, D37 step 1) →
+   first deploy creates the Job.
 4. **Re-run `setup-gcp.sh`** — the gub-admin-SA→Job binding can't be
    created until the Job exists.
 
@@ -138,7 +140,7 @@ When a prod environment exists:
 3. Populate `gub-research-worker-db-url-prod` (reuse `prod-database-url`)
    and `gub-research-worker-perplexity-api-key-prod`. Consider a
    separate prod Perplexity key for cost isolation/attribution.
-4. Push to `main`; first deploy creates `gub-research-worker-prod`.
+4. Dispatch the Deploy workflow and approve it; first deploy creates `gub-research-worker-prod`.
 5. Re-run `setup-gcp.sh` to bind `sa-gub-admin-prod` → the prod Job.
 6. Confirm gub-admin's env carries `GCP_PROJECT_ID` / `GCP_REGION` /
    `RESEARCH_JOB_NAME=gub-research-worker-prod` so its Sync button fires
